@@ -5445,6 +5445,70 @@ static struct attribute_group dynamic_dsi_clock_fs_attrs_group = {
 	.attrs = dynamic_dsi_clock_fs_attrs,
 };
 
+static ssize_t sysfs_dc_dimming_read(struct device *dev,
+				     struct device_attribute *attr,
+				     char *buf)
+{
+	struct dsi_display *display;
+	struct dsi_panel *panel;
+	bool status;
+
+	display = dev_get_drvdata(dev);
+	if (!display) {
+		DSI_ERR("Invalid display\n");
+		return -EINVAL;
+	}
+
+	panel = display->panel;
+
+	mutex_lock(&panel->panel_lock);
+	status = panel->dc_dimming_enabled;
+	mutex_unlock(&panel->panel_lock);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", status);
+}
+
+static ssize_t sysfs_dc_dimming_write(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct dsi_display *display;
+	struct dsi_panel *panel;
+	struct drm_connector *connector = NULL;
+	bool status;
+	int rc = 0;
+
+	display = dev_get_drvdata(dev);
+	if (!display) {
+		DSI_ERR("Invalid display\n");
+		return -EINVAL;
+	}
+
+	rc = kstrtobool(buf, &status);
+	if (rc) {
+		DSI_ERR("%s: kstrtoint failed. rc=%d\n", __func__, rc);
+		return rc;
+	}
+
+	panel = display->panel;
+
+	panel->dc_dimming_enabled = status;
+	dsi_display_set_backlight(connector, display, panel->bl_config.bl_level);
+
+	return count;
+}
+
+static DEVICE_ATTR(dc_dimming_enabled, 0644, sysfs_dc_dimming_read, sysfs_dc_dimming_write);
+
+static struct attribute *display_fs_attrs[] = {
+	&dev_attr_dc_dimming_enabled.attr,
+	NULL,
+};
+
+static struct attribute_group display_fs_attrs_group = {
+	.attrs = display_fs_attrs,
+};
+
 static int dsi_display_sysfs_init(struct dsi_display *display)
 {
 	int rc = 0;
@@ -5453,9 +5517,16 @@ static int dsi_display_sysfs_init(struct dsi_display *display)
 	if (display->panel->panel_mode == DSI_OP_CMD_MODE)
 		rc = sysfs_create_group(&dev->kobj,
 			&dynamic_dsi_clock_fs_attrs_group);
+	if (rc) {
+		pr_err("failed to create dynamic dsi clock attributes");
+		return rc;
+	}
+
+	rc = sysfs_create_group(&dev->kobj, &display_fs_attrs_group);
+	if (rc)
+		pr_err("failed to create display device attributes");
 
 	return rc;
-
 }
 
 static int dsi_display_sysfs_deinit(struct dsi_display *display)
@@ -5466,8 +5537,10 @@ static int dsi_display_sysfs_deinit(struct dsi_display *display)
 		sysfs_remove_group(&dev->kobj,
 			&dynamic_dsi_clock_fs_attrs_group);
 
-	return 0;
+	sysfs_remove_group(&dev->kobj,
+		&display_fs_attrs_group);
 
+	return 0;
 }
 
 /**
